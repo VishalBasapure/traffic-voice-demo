@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Traffic Voice Alerts</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 620px; margin: 35px auto; padding: 0 18px; line-height: 1.5; }
+    button { font-size: 17px; padding: 12px 16px; margin: 6px 4px 6px 0; cursor: pointer; }
+    #status { padding: 12px; background: #f1f1f1; border-radius: 8px; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h2>Traffic Voice Alerts</h2>
+  <p>Keep this page open and your boAt speaker connected to your phone.</p>
+
+  <button id="connect">Connect to TrafficVoice</button>
+  <button id="testMain">Test main-road voice</button>
+  <button id="testSide">Test converging-road voice</button>
+  <p id="status">Not connected</p>
+
+  <script>
+    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+    const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+    const statusEl = document.getElementById("status");
+    let lastSpokenState = "";
+    let lastSpokenAt = 0;
+
+    function speak(message, state) {
+      const now = Date.now();
+      // Prevent the same warning from being spoken repeatedly.
+      if (state === lastSpokenState && now - lastSpokenAt < 3000) return;
+      lastSpokenState = state;
+      lastSpokenAt = now;
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(message);
+      utterance.lang = "en-IN";
+      utterance.rate = 0.9;
+      utterance.onend = () => { statusEl.textContent = "Connected; spoke: " + message; };
+      utterance.onerror = (e) => { statusEl.textContent = "Speech error: " + e.error; };
+      window.speechSynthesis.speak(utterance);
+    }
+
+    document.getElementById("testMain").addEventListener("click", () => {
+      speak("Slow down for main road", "TEST_MAIN_" + Date.now());
+    });
+
+    document.getElementById("testSide").addEventListener("click", () => {
+      speak("Slow down for converging road", "TEST_SIDE_" + Date.now());
+    });
+
+    document.getElementById("connect").addEventListener("click", async () => {
+      if (!navigator.bluetooth) {
+        statusEl.textContent = "Web Bluetooth unavailable. Open this page in Chrome on Android using an HTTPS URL.";
+        return;
+      }
+
+      try {
+        statusEl.textContent = "Choose TrafficVoice in the Bluetooth picker...";
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: "TrafficVoice" }],
+          optionalServices: [SERVICE_UUID]
+        });
+
+        device.addEventListener("gattserverdisconnected", () => {
+          statusEl.textContent = "Disconnected. Reconnect using the button.";
+        });
+
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        const characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        await characteristic.startNotifications();
+
+        characteristic.addEventListener("characteristicvaluechanged", (event) => {
+          const value = new TextDecoder().decode(event.target.value).trim();
+          statusEl.textContent = "Received from ESP32: " + value;
+
+          if (value === "MAIN") {
+            speak("Slow down for main road", "MAIN");
+          } else if (value === "CONVERGING") {
+            speak("Slow down for converging road", "CONVERGING");
+          }
+        });
+
+        statusEl.textContent = "Connected to TrafficVoice. Move an object in front of either sensor.";
+        speak("Traffic voice connected", "CONNECTED_" + Date.now());
+      } catch (error) {
+        statusEl.textContent = "Connection error: " + error.message;
+      }
+    });
+  </script>
+</body>
+</html>
